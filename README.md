@@ -12,6 +12,8 @@ Requires Node.js 22.12 or newer. Run `npm ci`, copy `.env.example` to `.env.loca
 
 Import this directory as a Git repository into Vercel, select the Next.js preset, and add the environment variables in project settings. Deploy using the default `npm run build` command. Set a function duration of 60 seconds or use a plan that supports the route's `maxDuration`. Test both public endpoints after deployment. Live local provider checks passed; no Vercel deployment has been performed.
 
+In Vercel's Settings → Build and Deployment, use Framework Preset **Next.js** and leave the Output Directory override disabled. The app uses Next.js's standard `.next` output directory. If an older deployment fails with “The Next.js output directory .next was not found”, update `next.config.ts` to remove the custom `distDir`, commit the updated source, and deploy that new commit. Redeploying an old commit will retain its old configuration.
+
 ## Chat commands
 
 Path-based commands:
