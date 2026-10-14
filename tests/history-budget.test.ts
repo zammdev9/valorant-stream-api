@@ -34,20 +34,22 @@ it('backfill stops at quota and resumes with retained details without publishing
   const updates=[u('anchor',8),...Array.from({length:20},(_,i)=>u(`id${i}`))];
   vi.stubGlobal('fetch',vi.fn(async(url:string)=> { calls.push(url); const data=url.includes('/account/')?{puuid:'player',region:'na'}:url.includes('/mmr-history/')?{account:{puuid:'player'},history:updates}:url.includes('/v4/match/')?m(url.split('/').at(-1)!):[m('anchor',8)]; return Response.json({status:200,data}); }));
   const p=new HenrikProvider(cfg('backfill'),'a'); await expect(p.history(start)).rejects.toMatchObject({status:429});
-  const before=calls.filter(x=>x.includes('/v4/match/')).length; expect(before).toBe(8); // 3+3+5+8*2=27
+  const before=calls.filter(x=>x.includes('/v4/match/')).length; expect(before).toBe(4); // 3+3+12+4*2=26
+  vi.advanceTimersByTime(60001); await expect(p.history(start)).rejects.toMatchObject({status:429});
   vi.advanceTimersByTime(60001); expect((await p.history(start)).complete).toBe(true);
   expect(calls.filter(x=>x.includes('/v4/match/'))).toHaveLength(20);
+  expect(new Set(calls.filter(x=>x.includes('/v4/match/'))).size).toBe(20);
 });
 it('scans to a live boundary on cold start so games missing MMR beyond the front page are counted',async()=> {
   const calls:string[]=[];
   vi.stubGlobal('fetch',vi.fn(async(url:string)=> {
     calls.push(url);
     const data=url.includes('/account/')?{puuid:'player',region:'na'}:url.includes('/mmr-history/')?{account:{puuid:'player'},history:[u('anchor',8),u('one'),u('two'),u('three')]}:
-      url.includes('start=0')?[m('one'),m('two'),m('three')]:[m('missing'),m('anchor',8)];
+      url.includes('start=0')?[m('one'),m('two'),m('three'),m('missing-a')]:[m('missing-b'),m('anchor',8)];
     return Response.json({status:200,data});
   }));
   const h=await new HenrikProvider(cfg('cold-boundary'),'a').history(start);
-  expect(h.complete).toBe(true); expect(calculate(start,h.matches,h.mmr,h.complete,Date.parse('2026-10-12T14:00:00Z'))).toBe('Stream Record: 4W-0L | RR unavailable');
+  expect(h.complete).toBe(true); expect(calculate(start,h.matches,h.mmr,h.complete,Date.parse('2026-10-12T14:00:00Z'))).toBe('Stream Record: 5W-0L | RR unavailable');
   expect(calls.filter(x=>x.includes('/matches/'))).toHaveLength(2);
 });
 it('resumes a quota-interrupted live pagination scan without downloading its prefix again',async()=> {
@@ -55,15 +57,30 @@ it('resumes a quota-interrupted live pagination scan without downloading its pre
   const calls:string[]=[]; const games=[...Array.from({length:24},(_,i)=>m(`g${i}`)),m('anchor',8)];
   vi.stubGlobal('fetch',vi.fn(async(url:string)=> {
     calls.push(url);
-    const offset=Number(new URL(url).searchParams.get('start'));
-    const data=url.includes('/account/')?{puuid:'player',region:'na'}:url.includes('/mmr-history/')?{account:{puuid:'player'},history:[...Array.from({length:24},(_,i)=>u(`g${i}`)),u('anchor',8)]}:games.slice(offset,offset+3);
+    const offset=Number(new URL(url).searchParams.get('start')); const size=Number(new URL(url).searchParams.get('size'));
+    const data=url.includes('/account/')?{puuid:'player',region:'na'}:url.includes('/mmr-history/')?{account:{puuid:'player'},history:[...Array.from({length:24},(_,i)=>u(`g${i}`)),u('anchor',8)]}:games.slice(offset,offset+size);
     return Response.json({status:200,data});
   }));
   const p=new HenrikProvider(cfg('resume-pages'),'a'); await expect(p.history(start)).rejects.toMatchObject({status:429});
-  expect(calls.filter(x=>x.includes('/matches/'))).toHaveLength(4);
+  expect(calls.filter(x=>x.includes('/matches/'))).toHaveLength(1);
   vi.advanceTimersByTime(60001); const h=await p.history(start); expect(h.complete).toBe(true);
-  expect(calls.filter(x=>x.includes('/matches/'))).toHaveLength(9);
+  expect(calls.filter(x=>x.includes('/matches/')).map(x=>Number(new URL(x).searchParams.get('start')))).toEqual([0,10,20]);
   expect(calculate(start,h.matches,h.mmr,h.complete)).toBe('Stream Record: 24W-0L | +480 RR');
+});
+it('backfills thirteen stream games within one quota window and keeps warm refreshes small',async()=> {
+  vi.useFakeTimers();vi.setSystemTime(new Date('2026-10-12T14:00:00Z'));
+  const calls:string[]=[];const games=[...Array.from({length:13},(_,i)=>m(`g${i}`)),m('anchor',8)];
+  vi.stubGlobal('fetch',vi.fn(async(url:string)=> {
+    calls.push(url);const params=new URL(url).searchParams;const offset=Number(params.get('start'));const size=Number(params.get('size'));
+    const data=url.includes('/account/')?{puuid:'player'}:url.includes('/mmr-history/')?{account:{puuid:'player'},history:[...Array.from({length:13},(_,i)=>u(`g${i}`)),u('anchor',8)]}:games.slice(offset,offset+size);
+    return Response.json({status:200,data});
+  }));
+  const provider=new HenrikProvider(cfg('thirteen-games'),'a');const first=await provider.history(start);
+  expect(first.complete).toBe(true);expect(calculate(start,first.matches,first.mmr,first.complete)).toBe('Stream Record: 13W-0L | +260 RR');
+  expect(calls.filter(x=>x.includes('/matches/')).map(x=>Number(new URL(x).searchParams.get('size')))).toEqual([10,4]);
+  vi.advanceTimersByTime(120001);const refreshed=await provider.history(start);expect(refreshed.complete).toBe(true);
+  expect(calls.filter(x=>x.includes('/matches/')).map(x=>Number(new URL(x).searchParams.get('size')))).toEqual([10,4,3]);
+  expect(calculate(start,refreshed.matches,refreshed.mmr,refreshed.complete)).toBe('Stream Record: 13W-0L | +260 RR');
 });
 it('new stream reuses match details but filters its own time boundary',async()=> {
   const calls:string[]=[];

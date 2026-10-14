@@ -1,4 +1,4 @@
-import { UpstreamError } from './http';
+import { UpstreamError, retrySeconds } from './http';
 
 const WINDOW = 60000;
 const LIMIT = 27; // Leave three units of headroom below the 30/minute plan.
@@ -20,7 +20,13 @@ export class HenrikBudget {
       if (now >= this.resetAt) this.remaining = undefined;
       const spent = this.reservations.reduce((sum, r) => sum + r.cost, 0);
       if (now < this.pausedUntil || spent + cost > LIMIT || (this.remaining !== undefined && this.remaining < cost + 3)) {
-        throw new UpstreamError(429);
+        let afterExpiry = spent, reservationWait = 0;
+        for (const reservation of this.reservations) {
+          if (afterExpiry + cost <= LIMIT) break;
+          afterExpiry -= reservation.cost; reservationWait = reservation.at + WINDOW;
+        }
+        const waitUntil = Math.max(this.pausedUntil, this.remaining !== undefined && this.remaining < cost + 3 ? this.resetAt : 0, reservationWait);
+        throw new UpstreamError(429, { provider: 'henrik', operation: 'quota_guard', reason: 'rate_limit', retryAfterSeconds: Math.max(1, Math.ceil((waitUntil - now) / 1000)) });
       }
       // Reserve before fetch, including failed calls. Never assume a cache hit upstream.
       this.reservations.push({ at: now, cost });
@@ -40,12 +46,7 @@ export class HenrikBudget {
       this.resetAt = Date.now() + (Number.isFinite(reset) && reset > 0 ? reset : 60) * 1000;
     }
     if (status === 429) {
-      const retry = headers.get('Retry-After');
-      const seconds = retry === null ? NaN : Number(retry);
-      const date = retry === null ? NaN : Date.parse(retry);
-      const until = Number.isFinite(seconds) && seconds > 0 ? Date.now() + seconds * 1000
-        : Number.isFinite(date) && date > Date.now() ? date
-        : Date.now() + (Number.isFinite(reset) && reset > 0 ? reset : 60) * 1000;
+      const until = Date.now() + retrySeconds(headers) * 1000;
       this.pausedUntil = Math.max(this.pausedUntil, until);
     }
   }

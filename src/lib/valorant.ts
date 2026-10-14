@@ -14,7 +14,7 @@ const DAY = 86400000;
 const PAGE_SIZE = 3;
 type RawMatch = z.infer<typeof matchSchema>;
 type Update = z.infer<typeof mmrSchema>['data']['history'][number];
-type Ledger = { expires: number; matches: Map<string, RawMatch>; updates: Map<string, Update>; covered: Set<string>; scan?: { head: string; next: number; visited: Set<string> } };
+type Ledger = { expires: number; matches: Map<string, RawMatch>; updates: Map<string, Update>; covered: Set<string>; scan?: { head: string; frontSize: number; next: number; visited: Set<string> } };
 const ledgers = new Map<string, Ledger>();
 function ledger(key: string): Ledger {
   for (const [k, value] of ledgers) if (value.expires <= Date.now()) ledgers.delete(k);
@@ -82,17 +82,22 @@ export class HenrikProvider implements ValorantProvider {
       // Reuse only details linked to this session's live update IDs.
       for (const e of updates) { const m = retained.get(e.match_id); if (m) session.matches.set(e.match_id, m); }
       const normalized = () => [...session.matches.values()].map(m => normalize(m, id));
+      // Cold backfills use larger pages to avoid paying the per-page overhead
+      // repeatedly. Warm refreshes retain the small three-match front page.
+      const coldSize = () => Math.min(10, Math.max(PAGE_SIZE, updates.filter(e => Date.parse(e.date) >= start && !session.scan?.visited.has(e.match_id)).length + 1));
+      const frontSize = session.covered.size ? PAGE_SIZE : session.scan?.frontSize ?? coldSize();
       let complete = false;
       for (let offset = 0; offset < 100;) {
         // Always read the front page on refresh to discover newly completed games,
         // including outcomes with delayed/missing MMR updates.
-        const pageKey = offset === 0 ? `front:${key}` : `page:${key}:${session.scan?.head}:${offset}`;
-        const page = await cache.get(pageKey, REFRESH, async () => historySchema.parse(await this.get(`v4/by-puuid/matches/${base}?mode=competitive&size=${PAGE_SIZE}&start=${offset}`, PAGE_SIZE + 2)).data);
+        const size = offset === 0 ? frontSize : session.covered.size ? PAGE_SIZE : coldSize();
+        const pageKey = offset === 0 ? `front:${key}:${size}` : `page:${key}:${session.scan?.head}:${offset}:${size}`;
+        const page = await cache.get(pageKey, REFRESH, async () => historySchema.parse(await this.get(`v4/by-puuid/matches/${base}?mode=competitive&size=${size}&start=${offset}`, size + 2)).data);
         if (offset === 0) {
           const head = JSON.stringify(page.map(m => m.metadata.match_id).sort());
           // Resume a quota-interrupted scan only if the live head is unchanged.
           // If new matches shift offsets, start a new traversal from the front.
-          if (session.scan?.head !== head) session.scan = { head, next: PAGE_SIZE, visited: new Set() };
+          if (session.scan?.head !== head) session.scan = { head, frontSize, next: size, visited: new Set() };
         }
         const scan = session.scan!;
         for (const m of page) scan.visited.add(m.metadata.match_id);
@@ -116,8 +121,8 @@ export class HenrikProvider implements ValorantProvider {
           break;
         }
         // Without a pre-stream update, further pagination cannot certify coverage.
-        if (page.length < PAGE_SIZE || !updates.some(e => Date.parse(e.date) <= start)) break;
-        offset = offset === 0 ? scan.next : offset + PAGE_SIZE;
+        if (page.length < size || !updates.some(e => Date.parse(e.date) <= start)) break;
+        offset = offset === 0 ? scan.next : offset + size;
         scan.next = offset;
       }
       const mmr: Mmr[] = updates.map(e => ({ id: e.match_id, start: Date.parse(e.date), delta: e.is_placement_match === false && e.tier.id > 0 ? e.last_change : null }));

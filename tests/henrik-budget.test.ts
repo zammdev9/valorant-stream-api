@@ -36,3 +36,9 @@ it('counts failed upstream attempts against the local budget', async()=> {
   for(let i=0;i<9;i++) await expect(b.run(3,load)).rejects.toThrow('outage');
   await expect(b.run(3,load)).rejects.toMatchObject({status:429}); expect(load).toHaveBeenCalledTimes(9);
 });
+it('reports the wait until enough reservations expire for the blocked operation',async()=> {
+  vi.useFakeTimers();const b=new HenrikBudget();
+  for(let i=0;i<5;i++) { await b.run(5,async()=>1); if(i<4) vi.advanceTimersByTime(10000); }
+  await expect(b.run(12,async()=>1)).rejects.toMatchObject({status:429,details:{operation:'quota_guard',retryAfterSeconds:30}});
+  vi.advanceTimersByTime(30000);expect(await b.run(12,async()=>42)).toBe(42);
+});
