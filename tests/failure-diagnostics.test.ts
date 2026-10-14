@@ -28,7 +28,7 @@ it('keeps upstream rate-limit cooldowns and retry headers consistent across repe
   const fetch=vi.fn(async()=>new Response('private-provider-body',{status:429,headers:{'Retry-After':retry}}));vi.stubGlobal('fetch',fetch);
   for(let attempt=0;attempt<2;attempt++) {
     const r=await command('rank',input);expect(r.status).toBe(429);expect(r.headers.get('retry-after')).toBe('90');
-    expect(await r.text()).toContain('HenrikDev request limit reached');
+    expect(await r.text()).toContain(attempt===0?'HenrikDev request limit reached':'local request guard paused HenrikDev calls');
     expect(r.headers.get('x-statistics-error')).toBe(attempt===0?'henrik_rate_limit':'henrik_quota_guard');
   }
   expect(fetch).toHaveBeenCalledTimes(1);

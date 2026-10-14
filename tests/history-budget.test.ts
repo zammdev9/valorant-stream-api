@@ -82,6 +82,19 @@ it('backfills thirteen stream games within one quota window and keeps warm refre
   expect(calls.filter(x=>x.includes('/matches/')).map(x=>Number(new URL(x).searchParams.get('size')))).toEqual([10,4,3]);
   expect(calculate(start,refreshed.matches,refreshed.mmr,refreshed.complete)).toBe('Stream Record: 13W-0L | +260 RR');
 });
+it('uses real quota headers to finish a longer cold history without a phantom limit',async()=> {
+  const games=[...Array.from({length:24},(_,i)=>m(`g${i}`)),m('anchor',8)];
+  const remaining=[29,28,25,22,19];const calls:string[]=[];
+  vi.stubGlobal('fetch',vi.fn(async(url:string)=> {
+    calls.push(url);const params=new URL(url).searchParams;const offset=Number(params.get('start'));const size=Number(params.get('size'));
+    const data=url.includes('/account/')?{puuid:'player'}:url.includes('/mmr-history/')?{account:{puuid:'player'},history:[...Array.from({length:24},(_,i)=>u(`g${i}`)),u('anchor',8)]}:games.slice(offset,offset+size);
+    return Response.json({status:200,data},{headers:{'X-RateLimit-Remaining':String(remaining[calls.length-1]),'X-RateLimit-Reset':'45'}});
+  }));
+  const history=await new HenrikProvider(cfg('header-backfill'),'a').history(start);
+  expect(history.complete).toBe(true);expect(calculate(start,history.matches,history.mmr,history.complete)).toBe('Stream Record: 24W-0L | +480 RR');
+  expect(calls.filter(x=>x.includes('/matches/')).map(x=>Number(new URL(x).searchParams.get('size')))).toEqual([10,10,5]);
+  expect(calls).toHaveLength(5);
+});
 it('new stream reuses match details but filters its own time boundary',async()=> {
   const calls:string[]=[];
   vi.stubGlobal('fetch',vi.fn(async(url:string)=> { calls.push(url); const data=url.includes('/account/')?{puuid:'player',region:'na'}:url.includes('/mmr-history/')?{account:{puuid:'player'},history:[u('anchor',8),u('one')]}:[m('anchor',8),m('one')]; return Response.json({status:200,data}); }));

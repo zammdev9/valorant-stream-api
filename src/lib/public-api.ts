@@ -38,7 +38,9 @@ export async function command(kind: 'record' | 'rank', input: CommandInput): Pro
       const label = provider === 'henrik' ? 'HenrikDev' : provider === 'twitch' ? 'Twitch' : 'upstream provider';
       code = `${provider ?? 'upstream'}_${operation === 'quota_guard' ? 'quota_guard' : reason === 'http' ? `http_${e.status}` : reason ?? 'unexpected'}`;
       retryAfter = e.details.retryAfterSeconds ?? 60;
-      if (status === 429) text = `Statistics temporarily unavailable: ${label} request limit reached. Please try again in ${retryAfter} seconds.`;
+      if (status === 429) text = operation === 'quota_guard'
+        ? `Statistics temporarily unavailable: the local request guard paused ${label} calls. Please try again in ${retryAfter} seconds.`
+        : `Statistics temporarily unavailable: ${label} request limit reached. Please try again in ${retryAfter} seconds.`;
       else if (reason === 'timeout') text = `Statistics temporarily unavailable: ${label} did not respond in time. Please try again later.`;
       else if (reason === 'invalid_response') text = `Statistics temporarily unavailable: ${label} returned unexpected data. Please try again later.`;
       else if (reason === 'http' && [401,403].includes(e.status)) text = `Statistics unavailable: ${label} rejected the server credentials.`;

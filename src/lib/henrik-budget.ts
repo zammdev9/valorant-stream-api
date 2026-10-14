@@ -1,7 +1,7 @@
 import { UpstreamError, retrySeconds } from './http';
 
 const WINDOW = 60000;
-const LIMIT = 27; // Leave three units of headroom below the 30/minute plan.
+const LIMIT = 27; // Leave three requests of headroom below the 30/minute plan.
 type Reservation = { at: number; cost: number };
 
 // Serialize Henrik requests so each response's quota headers govern the next call.
@@ -13,24 +13,28 @@ export class HenrikBudget {
   private pausedUntil = 0;
   private tail: Promise<unknown> = Promise.resolve();
 
-  run<T>(cost: number, load: (observe: (headers: Headers, status: number) => void) => Promise<T>): Promise<T> {
+  run<T>(estimatedCost: number, load: (observe: (headers: Headers, status: number) => void) => Promise<T>): Promise<T> {
     const work = this.tail.then(async () => {
       const now = Date.now();
       this.reservations = this.reservations.filter(r => r.at + WINDOW > now);
       if (now >= this.resetAt) this.remaining = undefined;
       const spent = this.reservations.reduce((sum, r) => sum + r.cost, 0);
-      if (now < this.pausedUntil || spent + cost > LIMIT || (this.remaining !== undefined && this.remaining < cost + 3)) {
+      // Valid provider headers account for actual background work. Do not count
+      // hypothetical uncached match downloads again after that reconciliation.
+      const admissionCost = this.remaining === undefined ? estimatedCost : 1;
+      if (now < this.pausedUntil || spent + admissionCost > LIMIT || (this.remaining !== undefined && this.remaining <= 3)) {
         let afterExpiry = spent, reservationWait = 0;
         for (const reservation of this.reservations) {
-          if (afterExpiry + cost <= LIMIT) break;
+          if (afterExpiry + admissionCost <= LIMIT) break;
           afterExpiry -= reservation.cost; reservationWait = reservation.at + WINDOW;
         }
-        const waitUntil = Math.max(this.pausedUntil, this.remaining !== undefined && this.remaining < cost + 3 ? this.resetAt : 0, reservationWait);
+        const waitUntil = Math.max(this.pausedUntil, this.remaining !== undefined && this.remaining <= 3 ? this.resetAt : 0, reservationWait);
         throw new UpstreamError(429, { provider: 'henrik', operation: 'quota_guard', reason: 'rate_limit', retryAfterSeconds: Math.max(1, Math.ceil((waitUntil - now) / 1000)) });
       }
-      // Reserve before fetch, including failed calls. Never assume a cache hit upstream.
-      this.reservations.push({ at: now, cost });
-      if (this.remaining !== undefined) this.remaining -= cost;
+      // Reserve worst-case usage until a response supplies authoritative headers.
+      // Missing headers and failed requests retain this conservative fallback.
+      this.reservations.push({ at: now, cost: estimatedCost });
+      if (this.remaining !== undefined) this.remaining = Math.max(0, this.remaining - estimatedCost);
       return load((headers, status) => this.observe(headers, status));
     });
     this.tail = work.catch(() => undefined);
@@ -44,6 +48,10 @@ export class HenrikBudget {
     if (Number.isFinite(remaining) && remaining >= 0) {
       this.remaining = remaining;
       this.resetAt = Date.now() + (Number.isFinite(reset) && reset > 0 ? reset : 60) * 1000;
+      // All preceding requests have finished because this queue is serialized.
+      // The provider's remaining count covers their background costs; the local
+      // rolling window now only needs to count their actual outgoing API calls.
+      for (const reservation of this.reservations) reservation.cost = 1;
     }
     if (status === 429) {
       const until = Date.now() + retrySeconds(headers) * 1000;
