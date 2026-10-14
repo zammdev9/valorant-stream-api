@@ -8,14 +8,14 @@ beforeEach(async()=> {
 });
 afterEach(()=>{vi.unstubAllEnvs();vi.unstubAllGlobals();vi.restoreAllMocks();vi.useRealTimers();});
 it.each([
-  ['http_503',()=>Promise.resolve(new Response('private-provider-body',{status:503})), 'request failed'],
-  ['invalid_response',()=>Promise.resolve(Response.json({status:200,data:{}})), 'unexpected data'],
-  ['network',()=>Promise.reject(new Error('private-network-error')), 'request failed'],
-  ['timeout',()=>Promise.reject(new DOMException('private-timeout-error','TimeoutError')), 'did not respond in time'],
-  ['http_401',()=>Promise.resolve(new Response('private-provider-body',{status:401})), 'rejected the server credentials'],
-] as const)('identifies Henrik %s without leaking raw errors or credentials',async(reason,load,message)=> {
+  ['http_503',()=>Promise.resolve(new Response('private-provider-body',{status:503}))],
+  ['invalid_response',()=>Promise.resolve(Response.json({status:200,data:{}}))],
+  ['network',()=>Promise.reject(new Error('private-network-error'))],
+  ['timeout',()=>Promise.reject(new DOMException('private-timeout-error','TimeoutError'))],
+  ['http_401',()=>Promise.resolve(new Response('private-provider-body',{status:401}))],
+] as const)('identifies Henrik %s in diagnostics while showing a friendly message',async(reason,load)=> {
   vi.stubGlobal('fetch',vi.fn(load));const response=await command('rank',input);const body=await response.text();
-  expect(response.status).toBe(503);expect(body).toContain(message);
+  expect(response.status).toBe(503);expect(body).toBe('Stats are temporarily unavailable. Please try again shortly.');
   expect(response.headers.get('x-statistics-error')).toBe(`henrik_${reason}`);
   expect(response.headers.get('vercel-cdn-cache-control')).toBe('no-store');
   const log=JSON.parse(vi.mocked(console.warn).mock.calls[0][0]);
@@ -28,7 +28,7 @@ it('keeps upstream rate-limit cooldowns and retry headers consistent across repe
   const fetch=vi.fn(async()=>new Response('private-provider-body',{status:429,headers:{'Retry-After':retry}}));vi.stubGlobal('fetch',fetch);
   for(let attempt=0;attempt<2;attempt++) {
     const r=await command('rank',input);expect(r.status).toBe(429);expect(r.headers.get('retry-after')).toBe('90');
-    expect(await r.text()).toContain(attempt===0?'HenrikDev request limit reached':'local request guard paused HenrikDev calls');
+    expect(await r.text()).toBe('Stats are temporarily unavailable. Please try again in 90 seconds.');
     expect(r.headers.get('x-statistics-error')).toBe(attempt===0?'henrik_rate_limit':'henrik_quota_guard');
   }
   expect(fetch).toHaveBeenCalledTimes(1);
@@ -37,7 +37,7 @@ it('identifies Twitch failure before issuing any Henrik requests',async()=> {
   vi.stubEnv('TWITCH_CLIENT_ID','private-client');vi.stubEnv('TWITCH_CLIENT_SECRET','private-secret');
   const fetch=vi.fn(async()=>new Response('private-body',{status:502}));vi.stubGlobal('fetch',fetch);
   const r=await command('record',{...input,twitch:'amandatsukii'});
-  expect(r.status).toBe(503);expect(r.headers.get('x-statistics-error')).toBe('twitch_http_502');expect(await r.text()).toContain('Twitch');
+  expect(r.status).toBe(503);expect(r.headers.get('x-statistics-error')).toBe('twitch_http_502');expect(await r.text()).toBe('Stats are temporarily unavailable. Please try again shortly.');
   expect(fetch).toHaveBeenCalledTimes(1);expect(fetch.mock.calls[0]).toBeDefined();
   expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toContain('private-');
 });

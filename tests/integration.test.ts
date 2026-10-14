@@ -8,7 +8,7 @@ let key = 0;
 beforeEach(() => { cfg.HENRIK_API_KEY = `private-test-${++key}`; });
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.useRealTimers(); });
 it('missing credentials returns sanitized plain text', async () => {
-  vi.stubEnv('HENRIK_API_KEY',''); const r = await command('record', { name: 'name', tag: 'tag', region: 'na', twitch: 'streamer' }); expect(r.status).toBe(503); expect(r.headers.get('content-type')).toBe('text/plain; charset=utf-8'); expect(await r.text()).toContain('configuration');
+  vi.stubEnv('HENRIK_API_KEY',''); const r = await command('record', { name: 'name', tag: 'tag', region: 'na', twitch: 'streamer' }); expect(r.status).toBe(503); expect(r.headers.get('content-type')).toBe('text/plain; charset=utf-8'); expect(await r.text()).toBe('Stats are temporarily unavailable. Please try again shortly.'); expect(r.headers.get('x-statistics-error')).toBe('configuration');
 });
 it('Twitch outage propagates without invented statistics', async () => { vi.stubGlobal('fetch',vi.fn().mockRejectedValue(Error('secret'))); await expect(stream({...cfg,TWITCH_USERNAME:'outage'})).rejects.toThrow('upstream'); });
 it('Henrik outage propagates', async () => { vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response('{}',{status:500}))); await expect(new HenrikProvider({...cfg,VALORANT_NAME:'outage'},'a').rank()).rejects.toThrow('upstream'); });

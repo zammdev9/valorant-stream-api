@@ -30,22 +30,15 @@ export async function command(kind: 'record' | 'rank', input: CommandInput): Pro
   } catch (e) {
     if (e instanceof InputError) return inputError(e);
     status = e instanceof UpstreamError && e.status === 429 ? 429 : 503;
-    text = e instanceof Error && e.message === 'configuration' ? 'Statistics unavailable: server configuration is incomplete.' : 'Statistics temporarily unavailable. Please try again later.';
+    text = 'Stats are temporarily unavailable. Please try again shortly.';
     const requestId = crypto.randomUUID();
     let code = e instanceof Error && e.message === 'configuration' ? 'configuration' : 'unexpected';
     if (e instanceof UpstreamError) {
       const { provider, reason, operation } = e.details;
-      const label = provider === 'henrik' ? 'HenrikDev' : provider === 'twitch' ? 'Twitch' : 'upstream provider';
       code = `${provider ?? 'upstream'}_${operation === 'quota_guard' ? 'quota_guard' : reason === 'http' ? `http_${e.status}` : reason ?? 'unexpected'}`;
       retryAfter = e.details.retryAfterSeconds ?? 60;
-      if (status === 429) text = operation === 'quota_guard'
-        ? `Statistics temporarily unavailable: the local request guard paused ${label} calls. Please try again in ${retryAfter} seconds.`
-        : `Statistics temporarily unavailable: ${label} request limit reached. Please try again in ${retryAfter} seconds.`;
-      else if (reason === 'timeout') text = `Statistics temporarily unavailable: ${label} did not respond in time. Please try again later.`;
-      else if (reason === 'invalid_response') text = `Statistics temporarily unavailable: ${label} returned unexpected data. Please try again later.`;
-      else if (reason === 'http' && [401,403].includes(e.status)) text = `Statistics unavailable: ${label} rejected the server credentials.`;
-      else if (reason === 'http' && e.status === 404) text = `Statistics unavailable: ${label} could not find the requested data. Check the Riot ID and region.`;
-      else if (provider) text = `Statistics temporarily unavailable: ${label} request failed. Please try again later.`;
+      if (status === 429) text = `Stats are temporarily unavailable. Please try again in ${retryAfter} ${retryAfter === 1 ? 'second' : 'seconds'}.`;
+      else if (provider === 'henrik' && reason === 'http' && e.status === 404) text = "Couldn't load stats for this player. Please check the player name, tag, and region.";
     }
     errorHeaders = { 'X-Request-Id': requestId, 'X-Statistics-Error': code };
     // Log only our classifications, never raw errors, URLs, bodies or credentials.
